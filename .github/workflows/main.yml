@@ -17,7 +17,7 @@ permissions:
 
 env:
   DOTNET_VERSION_6: "6.0.x"   # legacy (remove once everything is upgraded)
-  DOTNET_VERSION_10: "8.0.x" # "latest" acceptable for the assignment (8/9/10 ok)
+  DOTNET_VERSION_10: "10.0.x" # "latest" acceptable for the assignment (8/9/10 ok)
 
 jobs:
   build-and-test:
@@ -33,7 +33,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION_6 }}
 
       # Latest SDK for upgraded code
-      - name: Setup .NET 8 (at least)
+      - name: Setup .NET 10 (latest)
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION_10 }}
