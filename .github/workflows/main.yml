@@ -25,14 +25,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      
-       # Install .NET 6 for legacy net6.0 solutions/tests
+
+      # Install .NET 6 for legacy net6.0 solutions/tests
       - name: Setup .NET 6 (legacy)
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION_6 }}
 
-      #  Install .NET 8 for newer solutions (optional but useful)
+      # Install .NET 8 for newer solutions
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
@@ -43,7 +43,6 @@ jobs:
         run: |
           set -e
 
-          # Find all solutions, ignoring common junk folders
           find . \
             -type d \( -name bin -o -name obj -o -name .git -o -name .github \) -prune -false \
             -o -type f -name "*.sln" -print0 \
@@ -57,7 +56,6 @@ jobs:
             echo "(none)"
           fi
 
-          # Fallback: find test csproj files if no solutions are found
           if [ ! -s solutions.zlist ]; then
             find . \
               -type d \( -name bin -o -name obj -o -name .git -o -name .github \) -prune -false \
@@ -75,8 +73,6 @@ jobs:
             fi
           fi
 
-      # Updated: run ALL solutions, keep going even if some fail,
-      # and print a summary at the end (but still fail the job if any failed).
       - name: Test ALL solutions (continue on failure)
         if: ${{ hashFiles('solutions.zlist') != '' }}
         shell: bash
@@ -100,7 +96,6 @@ jobs:
               FAIL=1
               FAILED_LIST="${FAILED_LIST}\n- ${sln}"
             fi
-
           done < solutions.zlist
 
           echo ""
@@ -129,13 +124,12 @@ jobs:
             if dotnet test "$proj" -c Release \
               --collect:"XPlat Code Coverage" \
               --logger "trx;LogFileName=test-results.trx"; then
-              echo PASS: $proj"
+              echo "PASS: $proj"
             else
-              echo FAIL: $proj"
+              echo "FAIL: $proj"
               FAIL=1
               FAILED_LIST="${FAILED_LIST}\n- ${proj}"
             fi
-
           done < testprojects.zlist
 
           echo ""
