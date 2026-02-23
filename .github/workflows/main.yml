@@ -1,4 +1,4 @@
-name: Test & Publish Coverage (SportsSln)
+name: Test & Publish Coverage (ALL folders)
 
 on:
   workflow_dispatch:
@@ -6,12 +6,10 @@ on:
     branches: [ master ]
   pull_request:
 
-# Avoid overlapping Pages deployments
 concurrency:
   group: "pages"
   cancel-in-progress: true
 
-# Required for GitHub Pages deploy
 permissions:
   contents: read
   pages: write
@@ -19,8 +17,6 @@ permissions:
 
 env:
   DOTNET_VERSION: "8.0.x"
-  # ✅ Your solution file path (from your repo structure)
-  SOLUTION_PATH: "07 - SportsStore/Beginning of Chapter/SportsSln/SportsSln.sln"
 
 jobs:
   build-and-test:
@@ -34,23 +30,80 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Restore (solution)
-        run: dotnet restore "${{ env.SOLUTION_PATH }}"
+      - name: Discover solutions (and fallback test projects)
+        shell: bash
+        run: |
+          set -e
 
-      - name: Build (solution)
-        run: dotnet build "${{ env.SOLUTION_PATH }}" --no-restore -c Release
+          # Find all solutions, ignoring common junk folders
+          find . \
+            -type d \( -name bin -o -name obj -o -name .git -o -name .github \) -prune -false \
+            -o -type f -name "*.sln" -print0 \
+            | sort -z \
+            > solutions.zlist || true
 
-      # xUnit tests + Coverlet data collector
-      - name: Test (solution) and collect coverage
-        run: >
-          dotnet test "${{ env.SOLUTION_PATH }}" -c Release --no-build
-          --collect:"XPlat Code Coverage"
-          --logger "trx;LogFileName=test-results.trx"
+          echo "Solutions found:"
+          if [ -s solutions.zlist ]; then
+            tr '\0' '\n' < solutions.zlist
+          else
+            echo "(none)"
+          fi
+
+          # Fallback: find test csproj files if no solutions are found
+          if [ ! -s solutions.zlist ]; then
+            find . \
+              -type d \( -name bin -o -name obj -o -name .git -o -name .github \) -prune -false \
+              -o -type f -name "*.csproj" -print0 \
+              | grep -zEi "(tests|test)\.csproj$" \
+              | sort -z \
+              > testprojects.zlist || true
+
+            echo "Test projects found:"
+            if [ -s testprojects.zlist ]; then
+              tr '\0' '\n' < testprojects.zlist
+            else
+              echo "No .sln and no test *.csproj found. Nothing to run."
+              exit 1
+            fi
+          fi
+
+      - name: Test ALL solutions (preferred)
+        if: ${{ hashFiles('solutions.zlist') != '' }}
+        shell: bash
+        run: |
+          set -e
+          echo "Running dotnet test on every solution..."
+
+          while IFS= read -r -d '' sln; do
+            echo "========================================"
+            echo "TESTING SOLUTION: $sln"
+            echo "========================================"
+            dotnet test "$sln" -c Release \
+              --collect:"XPlat Code Coverage" \
+              --logger "trx;LogFileName=test-results.trx"
+          done < solutions.zlist
+
+      - name: Test ALL test projects (fallback)
+        if: ${{ hashFiles('solutions.zlist') == '' && hashFiles('testprojects.zlist') != '' }}
+        shell: bash
+        run: |
+          set -e
+          echo "No solutions found — running dotnet test on every test project..."
+
+          while IFS= read -r -d '' proj; do
+            echo "========================================"
+            echo "TESTING PROJECT: $proj"
+            echo "========================================"
+            dotnet test "$proj" -c Release \
+              --collect:"XPlat Code Coverage" \
+              --logger "trx;LogFileName=test-results.trx"
+          done < testprojects.zlist
 
       - name: Install ReportGenerator
         run: dotnet tool install -g dotnet-reportgenerator-globaltool
 
-      - name: Generate HTML coverage report
+      - name: Generate merged HTML coverage report
+        shell: bash
         run: |
           export PATH="$PATH:~/.dotnet/tools"
           reportgenerator \
@@ -58,14 +111,12 @@ jobs:
             -targetdir:coveragereport \
             -reporttypes:Html
 
-      # Make the HTML report available as a workflow artifact on PRs too
       - name: Upload coverage as build artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage-html
           path: coveragereport
 
-      # Only package for Pages when pushing to master
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         uses: actions/upload-pages-artifact@v3
@@ -73,7 +124,6 @@ jobs:
           path: ./coveragereport
 
   deploy:
-    # Only deploy on push to master
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: build-and-test
     runs-on: ubuntu-latest
