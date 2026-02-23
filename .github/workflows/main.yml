@@ -25,6 +25,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      
+       # Install .NET 6 for legacy net6.0 solutions/tests
+      - name: Setup .NET 6 (legacy)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION_6 }}
 
       #  Install .NET 8 for newer solutions (optional but useful)
       - name: Setup .NET 8
