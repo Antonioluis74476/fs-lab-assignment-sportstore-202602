@@ -1,4 +1,4 @@
-name: Test & Publish Coverage (multi-test projects)
+name: Test & Publish Coverage (SportsSln)
 
 on:
   workflow_dispatch:
@@ -6,10 +6,12 @@ on:
     branches: [ master ]
   pull_request:
 
+# Avoid overlapping Pages deployments
 concurrency:
   group: "pages"
   cancel-in-progress: true
 
+# Required for GitHub Pages deploy
 permissions:
   contents: read
   pages: write
@@ -17,6 +19,8 @@ permissions:
 
 env:
   DOTNET_VERSION: "8.0.x"
+  # ✅ Your solution file path (from your repo structure)
+  SOLUTION_PATH: "07 - SportsStore/Beginning of Chapter/SportsSln/SportsSln.sln"
 
 jobs:
   build-and-test:
@@ -30,47 +34,23 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Restore
-        run: dotnet restore
+      - name: Restore (solution)
+        run: dotnet restore "${{ env.SOLUTION_PATH }}"
 
-      - name: Build
-        run: dotnet build --no-restore -c Release
+      - name: Build (solution)
+        run: dotnet build "${{ env.SOLUTION_PATH }}" --no-restore -c Release
 
-      - name: Discover test projects
-        id: discover
-        shell: bash
-        run: |
-          echo "Finding test projects..."
-          # Common patterns: *.Tests.csproj, *Test*.csproj
-          mapfile -t TESTS < <(find . -name "*.csproj" \
-            | grep -Ei "(tests|test)\.csproj$" \
-            | sort)
-
-          if [ ${#TESTS[@]} -eq 0 ]; then
-            echo "No test projects found. Check naming or paths."
-            exit 1
-          fi
-
-          printf "%s\n" "${TESTS[@]}" > test-projects.txt
-          echo "Found test projects:"
-          cat test-projects.txt
-
-      - name: Test all test projects + collect coverage
-        shell: bash
-        run: |
-          set -e
-          while IFS= read -r proj; do
-            echo "Running tests for: $proj"
-            dotnet test "$proj" -c Release --no-build \
-              --collect:"XPlat Code Coverage" \
-              --logger "trx;LogFileName=test-results.trx"
-          done < test-projects.txt
+      # xUnit tests + Coverlet data collector
+      - name: Test (solution) and collect coverage
+        run: >
+          dotnet test "${{ env.SOLUTION_PATH }}" -c Release --no-build
+          --collect:"XPlat Code Coverage"
+          --logger "trx;LogFileName=test-results.trx"
 
       - name: Install ReportGenerator
         run: dotnet tool install -g dotnet-reportgenerator-globaltool
 
-      - name: Generate HTML coverage report (merged)
-        shell: bash
+      - name: Generate HTML coverage report
         run: |
           export PATH="$PATH:~/.dotnet/tools"
           reportgenerator \
@@ -78,12 +58,14 @@ jobs:
             -targetdir:coveragereport \
             -reporttypes:Html
 
+      # Make the HTML report available as a workflow artifact on PRs too
       - name: Upload coverage as build artifact
         uses: actions/upload-artifact@v4
         with:
           name: coverage-html
           path: coveragereport
 
+      # Only package for Pages when pushing to master
       - name: Upload Pages artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         uses: actions/upload-pages-artifact@v3
@@ -91,6 +73,7 @@ jobs:
           path: ./coveragereport
 
   deploy:
+    # Only deploy on push to master
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: build-and-test
     runs-on: ubuntu-latest
