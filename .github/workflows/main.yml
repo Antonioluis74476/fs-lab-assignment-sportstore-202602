@@ -16,7 +16,8 @@ permissions:
   id-token: write
 
 env:
-  DOTNET_VERSION: "8.0.x"
+  DOTNET_VERSION_6: "6.0.x"
+  DOTNET_VERSION_8: "8.0.x"
 
 jobs:
   build-and-test:
@@ -25,10 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET
+      #  Install .NET 8 for newer solutions (optional but useful)
+      - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-version: ${{ env.DOTNET_VERSION_8 }}
 
       - name: Discover solutions (and fallback test projects)
         shell: bash
@@ -67,37 +69,77 @@ jobs:
             fi
           fi
 
-      - name: Test ALL solutions (preferred)
+      # Updated: run ALL solutions, keep going even if some fail,
+      # and print a summary at the end (but still fail the job if any failed).
+      - name: Test ALL solutions (continue on failure)
         if: ${{ hashFiles('solutions.zlist') != '' }}
         shell: bash
         run: |
-          set -e
-          echo "Running dotnet test on every solution..."
+          FAIL=0
+          FAILED_LIST=""
+
+          echo "Running dotnet test on every solution (continue on failure)..."
 
           while IFS= read -r -d '' sln; do
             echo "========================================"
             echo "TESTING SOLUTION: $sln"
             echo "========================================"
-            dotnet test "$sln" -c Release \
+
+            if dotnet test "$sln" -c Release \
               --collect:"XPlat Code Coverage" \
-              --logger "trx;LogFileName=test-results.trx"
+              --logger "trx;LogFileName=test-results.trx"; then
+              echo "PASS: $sln"
+            else
+              echo "FAIL: $sln"
+              FAIL=1
+              FAILED_LIST="${FAILED_LIST}\n- ${sln}"
+            fi
+
           done < solutions.zlist
 
-      - name: Test ALL test projects (fallback)
+          echo ""
+          echo "========== TEST SUMMARY =========="
+          if [ $FAIL -ne 0 ]; then
+            echo -e "Some solutions failed:${FAILED_LIST}"
+            exit 1
+          else
+            echo "All solutions passed."
+          fi
+
+      - name: Test ALL test projects (fallback, continue on failure)
         if: ${{ hashFiles('solutions.zlist') == '' && hashFiles('testprojects.zlist') != '' }}
         shell: bash
         run: |
-          set -e
-          echo "No solutions found — running dotnet test on every test project..."
+          FAIL=0
+          FAILED_LIST=""
+
+          echo "No solutions found — running dotnet test on every test project (continue on failure)..."
 
           while IFS= read -r -d '' proj; do
             echo "========================================"
             echo "TESTING PROJECT: $proj"
             echo "========================================"
-            dotnet test "$proj" -c Release \
+
+            if dotnet test "$proj" -c Release \
               --collect:"XPlat Code Coverage" \
-              --logger "trx;LogFileName=test-results.trx"
+              --logger "trx;LogFileName=test-results.trx"; then
+              echo PASS: $proj"
+            else
+              echo FAIL: $proj"
+              FAIL=1
+              FAILED_LIST="${FAILED_LIST}\n- ${proj}"
+            fi
+
           done < testprojects.zlist
+
+          echo ""
+          echo "========== TEST SUMMARY =========="
+          if [ $FAIL -ne 0 ]; then
+            echo -e "Some test projects failed:${FAILED_LIST}"
+            exit 1
+          else
+            echo "All test projects passed."
+          fi
 
       - name: Install ReportGenerator
         run: dotnet tool install -g dotnet-reportgenerator-globaltool
