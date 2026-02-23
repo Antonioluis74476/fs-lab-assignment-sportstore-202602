@@ -1,4 +1,4 @@
-name: Test & Publish Coverage (ALL folders)
+name: CI - Restore, Build, Test + Coverage (ALL folders)
 
 on:
   workflow_dispatch:
@@ -16,8 +16,8 @@ permissions:
   id-token: write
 
 env:
-  DOTNET_VERSION_6: "6.0.x"
-  DOTNET_VERSION_8: "8.0.x"
+  DOTNET_VERSION_6: "6.0.x"   # legacy (remove once everything is upgraded)
+  DOTNET_VERSION_10: "8.0.x" # "latest" acceptable for the assignment (8/9/10 ok)
 
 jobs:
   build-and-test:
@@ -26,17 +26,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Install .NET 6 for legacy net6.0 solutions/tests
+      # Legacy support so net6.0 solutions can run tests while you upgrade them
       - name: Setup .NET 6 (legacy)
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION_6 }}
 
-      # Install .NET 8 for newer solutions
-      - name: Setup .NET 8
+      # Latest SDK for upgraded code
+      - name: Setup .NET 8 (at least)
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION_8 }}
+          dotnet-version: ${{ env.DOTNET_VERSION_10 }}
 
       - name: Discover solutions (and fallback test projects)
         shell: bash
@@ -73,73 +73,119 @@ jobs:
             fi
           fi
 
-      - name: Test ALL solutions (continue on failure)
+      # Explicit Restore + Build + Test (per-solution), continue on failure, summary at end
+      - name: Restore/Build/Test ALL solutions (continue on failure)
         if: ${{ hashFiles('solutions.zlist') != '' }}
         shell: bash
         run: |
           FAIL=0
           FAILED_LIST=""
 
-          echo "Running dotnet test on every solution (continue on failure)..."
+          echo "Running Restore + Build + Test on every solution (continue on failure)..."
 
           while IFS= read -r -d '' sln; do
             echo "========================================"
-            echo "TESTING SOLUTION: $sln"
+            echo "SOLUTION: $sln"
             echo "========================================"
 
-            if dotnet test "$sln" -c Release \
+            echo "== Restore =="
+            if ! dotnet restore "$sln"; then
+              echo "FAIL (restore): $sln"
+              FAIL=1
+              FAILED_LIST="${FAILED_LIST}\n- ${sln} (restore)"
+              continue
+            fi
+
+            echo "== Build =="
+            if ! dotnet build "$sln" -c Release --no-restore; then
+              echo "FAIL (build): $sln"
+              FAIL=1
+              FAILED_LIST="${FAILED_LIST}\n- ${sln} (build)"
+              continue
+            fi
+
+            echo "== Test =="
+            if dotnet test "$sln" -c Release --no-build \
               --collect:"XPlat Code Coverage" \
               --logger "trx;LogFileName=test-results.trx"; then
               echo "PASS: $sln"
             else
-              echo "FAIL: $sln"
+              echo "FAIL (tests): $sln"
               FAIL=1
-              FAILED_LIST="${FAILED_LIST}\n- ${sln}"
+              FAILED_LIST="${FAILED_LIST}\n- ${sln} (tests)"
             fi
+
           done < solutions.zlist
 
           echo ""
-          echo "========== TEST SUMMARY =========="
+          echo "========== PIPELINE SUMMARY =========="
           if [ $FAIL -ne 0 ]; then
-            echo -e "Some solutions failed:${FAILED_LIST}"
+            echo -e "Some targets failed:${FAILED_LIST}"
             exit 1
           else
             echo "All solutions passed."
           fi
 
-      - name: Test ALL test projects (fallback, continue on failure)
+      # Explicit Restore + Build + Test (per-test-project) fallback
+      - name: Restore/Build/Test ALL test projects (fallback, continue on failure)
         if: ${{ hashFiles('solutions.zlist') == '' && hashFiles('testprojects.zlist') != '' }}
         shell: bash
         run: |
           FAIL=0
           FAILED_LIST=""
 
-          echo "No solutions found — running dotnet test on every test project (continue on failure)..."
+          echo "No solutions found — running Restore + Build + Test on every test project (continue on failure)..."
 
           while IFS= read -r -d '' proj; do
             echo "========================================"
-            echo "TESTING PROJECT: $proj"
+            echo "TEST PROJECT: $proj"
             echo "========================================"
 
-            if dotnet test "$proj" -c Release \
+            echo "== Restore =="
+            if ! dotnet restore "$proj"; then
+              echo "FAIL (restore): $proj"
+              FAIL=1
+              FAILED_LIST="${FAILED_LIST}\n- ${proj} (restore)"
+              continue
+            fi
+
+            echo "== Build =="
+            if ! dotnet build "$proj" -c Release --no-restore; then
+              echo "FAIL (build): $proj"
+              FAIL=1
+              FAILED_LIST="${FAILED_LIST}\n- ${proj} (build)"
+              continue
+            fi
+
+            echo "== Test =="
+            if dotnet test "$proj" -c Release --no-build \
               --collect:"XPlat Code Coverage" \
               --logger "trx;LogFileName=test-results.trx"; then
               echo "PASS: $proj"
             else
-              echo "FAIL: $proj"
+              echo "FAIL (tests): $proj"
               FAIL=1
-              FAILED_LIST="${FAILED_LIST}\n- ${proj}"
+              FAILED_LIST="${FAILED_LIST}\n- ${proj} (tests)"
             fi
+
           done < testprojects.zlist
 
           echo ""
-          echo "========== TEST SUMMARY =========="
+          echo "========== PIPELINE SUMMARY =========="
           if [ $FAIL -ne 0 ]; then
-            echo -e "Some test projects failed:${FAILED_LIST}"
+            echo -e "Some targets failed:${FAILED_LIST}"
             exit 1
           else
             echo "All test projects passed."
           fi
+
+      # Test reporting artifact (TRX)
+      - name: Upload test results (TRX)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-trx
+          path: "**/*.trx"
 
       - name: Install ReportGenerator
         run: dotnet tool install -g dotnet-reportgenerator-globaltool
@@ -160,13 +206,13 @@ jobs:
           path: coveragereport
 
       - name: Upload Pages artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./coveragereport
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     needs: build-and-test
     runs-on: ubuntu-latest
     environment:
